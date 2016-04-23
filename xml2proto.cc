@@ -1,5 +1,5 @@
 // Compile with:
-//   g++ -Wall -lprotobuf -lprotoc -lxml2 -I/usr/include/libxml2 -lpthread ./xml2proto.cc
+//   clang++ -Wall -lprotobuf -lprotoc -lxml2 -I/usr/include/libxml2 -lpthread ./xml2proto.cc
 
 #include <iostream>
 #include <string>
@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <google/protobuf/descriptor.h>
 #include <google/protobuf/dynamic_message.h>
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -77,16 +78,17 @@ void FormatEnumValue(string* str) {
   }
 }
 
-bool ParseSimpleField(Message::Reflection* reflection,
+bool ParseSimpleField(Message *message,
+                      const Message::Reflection* reflection,
                       const FieldDescriptor* field,
                       const string& value) {
   switch (field->cpp_type()) {
     case FieldDescriptor::CPPTYPE_INT32: {
       char* endptr = NULL;
       if (field->label() == FieldDescriptor::LABEL_REPEATED) {
-        reflection->AddInt32(field, strtol(value.c_str(), &endptr, 0));
+        reflection->AddInt32(message, field, strtol(value.c_str(), &endptr, 0));
       } else {
-        reflection->SetInt32(field, strtol(value.c_str(), &endptr, 0));
+        reflection->SetInt32(message, field, strtol(value.c_str(), &endptr, 0));
       }
       if (*endptr != '\0') {
         cerr << "Expected int value for " << field->full_name()
@@ -109,18 +111,18 @@ bool ParseSimpleField(Message::Reflection* reflection,
       }
 
       if (field->label() == FieldDescriptor::LABEL_REPEATED) {
-        reflection->AddBool(field, bool_value);
+        reflection->AddBool(message, field, bool_value);
       } else {
-        reflection->SetBool(field, bool_value);
+        reflection->SetBool(message, field, bool_value);
       }
       return true;
     }
 
     case FieldDescriptor::CPPTYPE_STRING:
       if (field->label() == FieldDescriptor::LABEL_REPEATED) {
-        reflection->AddString(field, value);
+        reflection->AddString(message, field, value);
       } else {
-        reflection->SetString(field, value);
+        reflection->SetString(message, field, value);
       }
       return true;
 
@@ -139,9 +141,9 @@ bool ParseSimpleField(Message::Reflection* reflection,
       }
 
       if (field->label() == FieldDescriptor::LABEL_REPEATED) {
-        reflection->AddEnum(field, enum_value);
+        reflection->AddEnum(message, field, enum_value);
       } else {
-        reflection->SetEnum(field, enum_value);
+        reflection->SetEnum(message, field, enum_value);
       }
       return true;
     }
@@ -163,13 +165,13 @@ FieldRef FindField(Message* base, const string& name) {
   result.message = base;
   result.field = NULL;
   const Descriptor* descriptor = base->GetDescriptor();
-  Message::Reflection* reflection = base->GetReflection();
+  const Message::Reflection* reflection = base->GetReflection();
 
   result.field = descriptor->FindFieldByName("element");
   if (result.field != NULL &&
       result.field->type() == FieldDescriptor::TYPE_MESSAGE &&
       result.field->label() == FieldDescriptor::LABEL_REPEATED) {
-    result.message = reflection->AddMessage(result.field);
+    result.message = reflection->AddMessage(base, result.field);
     descriptor = result.message->GetDescriptor();
     reflection = result.message->GetReflection();
   }
@@ -188,7 +190,7 @@ FieldRef FindField(Message* base, const string& name) {
       return result;
     }
 
-    result.message = reflection->MutableMessage(result.field);
+    result.message = reflection->MutableMessage(base, result.field);
     descriptor = result.message->GetDescriptor();
     reflection = result.message->GetReflection();
   }
@@ -207,10 +209,10 @@ bool AddText(const string& text, int node_type, Message* message) {
     }
   } else {
     if (target.field->type() == FieldDescriptor::TYPE_STRING) {
-      Message::Reflection* reflection = target.message->GetReflection();
-      string value = reflection->GetString(target.field);
+      const Message::Reflection* reflection = target.message->GetReflection();
+      string value = reflection->GetString(*target.message, target.field);
       value.append(text);
-      reflection->SetString(target.field, value);
+      reflection->SetString(target.message, target.field, value);
       return true;
     } else {
       cerr << target.field->full_name() << " is not a string." << endl;
@@ -221,7 +223,7 @@ bool AddText(const string& text, int node_type, Message* message) {
 
 bool ReadAttributes(xmlTextReaderPtr reader, Message* message) {
   const Descriptor* descriptor = message->GetDescriptor();
-  Message::Reflection* reflection = message->GetReflection();
+  const Message::Reflection* reflection = message->GetReflection();
 
   if (xmlTextReaderHasAttributes(reader) > 0) {
     xmlTextReaderMoveToFirstAttribute(reader);
@@ -237,7 +239,7 @@ bool ReadAttributes(xmlTextReaderPtr reader, Message* message) {
              << endl;
         return false;
       }
-      if (!ParseSimpleField(reflection, field, value)) return false;
+      if (!ParseSimpleField(message, reflection, field, value)) return false;
     } while (xmlTextReaderMoveToNextAttribute(reader) > 0);
     xmlTextReaderMoveToElement(reader);
   }
@@ -282,15 +284,15 @@ bool ReadChildren(xmlTextReaderPtr reader, Message* message) {
           return false;
         }
 
-        Message::Reflection* target_reflection =
+        const Message::Reflection* target_reflection =
           target.message->GetReflection();
 
         if (target.field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
           Message* child;
           if (target.field->label() == FieldDescriptor::LABEL_REPEATED) {
-            child = target_reflection->AddMessage(target.field);
+            child = target_reflection->AddMessage(target.message, target.field);
           } else {
-            child = target_reflection->MutableMessage(target.field);
+            child = target_reflection->MutableMessage(target.message, target.field);
           }
           if (!ReadAttributes(reader, child)) return false;
           if (!ReadChildren(reader, child)) return false;
@@ -304,7 +306,7 @@ bool ReadChildren(xmlTextReaderPtr reader, Message* message) {
           xmlChar* content = xmlTextReaderReadString(reader);
           string value = (content == NULL) ? "" : ToString(content);
           free(content);
-          if (!ParseSimpleField(target_reflection, target.field, value)) {
+          if (!ParseSimpleField(target.message, target_reflection, target.field, value)) {
             return false;
           }
           SkipChildren(reader);

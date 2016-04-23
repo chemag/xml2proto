@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+message Address {
+  optional string Recipient = 1;
+  optional string House = 2;
+  optional string Street = 3;
+  optional string Town = 4;
+  optional string County = 5;
+  optional string PostCode = 6;
+  enum CountryMessage {
+    COUNTRYMESSAGE_IN = 0;
+    COUNTRYMESSAGE_DE = 1;
+    COUNTRYMESSAGE_ES = 2;
+    COUNTRYMESSAGE_UK = 3;
+    COUNTRYMESSAGE_US = 4;
+  }
+  optional CountryMessage Country = 7;
+}
